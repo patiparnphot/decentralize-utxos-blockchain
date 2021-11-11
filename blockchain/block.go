@@ -5,13 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/gob"
 	"log"
+	"time"
 )
 
 type Block struct {
+	Timestamp    int64
 	Hash         []byte
 	Transactions []*Transaction
 	PrevHash     []byte
 	Nonce        int
+	Height       int
 }
 
 func (block *Block) HashTransactions() []byte {
@@ -27,8 +30,8 @@ func (block *Block) HashTransactions() []byte {
 	return txHash[:]
 }
 
-func CreateBlock(txs []*Transaction, prevHash []byte) *Block {
-	block := &Block{[]byte{}, txs, prevHash, 0}
+func CreateBlock(txs []*Transaction, prevHash []byte, height int) *Block {
+	block := &Block{time.Now().Unix(), []byte{}, txs, prevHash, 0, height}
 
 	pow := NewProof(block)
 
@@ -41,7 +44,7 @@ func CreateBlock(txs []*Transaction, prevHash []byte) *Block {
 }
 
 func Genesis(cbTx *Transaction) *Block {
-	return CreateBlock([]*Transaction{cbTx}, []byte{})
+	return CreateBlock([]*Transaction{cbTx}, []byte{}, 0)
 }
 
 func (block *Block) Serialize() []byte {

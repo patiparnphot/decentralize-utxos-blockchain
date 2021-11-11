@@ -39,6 +39,15 @@ func (tx Transaction) Serialize() []byte {
 	return encoded.Bytes()
 }
 
+func DeserializeTransaction(data []byte) Transaction {
+	var transaction Transaction
+
+	decoder := gob.NewDecoder(bytes.NewReader(data))
+	err := decoder.Decode(&transaction)
+	Handle(err)
+	return transaction
+}
+
 func CoinbaseTx(to, data string) *Transaction {
 	if data == "" {
 		randData := make([]byte, 20)
@@ -87,6 +96,50 @@ func NewTransaction(from, to string, amount int, UTXO *UTXOSet) *Transaction {
 	tx.ID = tx.Hash()
 
 	return &tx
+}
+
+func CheckTransactions(transactions []*Transaction, UTXO *UTXOSet) bool {
+	amountMap := map[string]int{}
+
+	for _, transaction := range transactions {
+
+		inputs := transaction.Inputs
+		outputs := transaction.Outputs
+
+		from := inputs[0].Sig
+		var amount int
+
+		for _, out := range outputs {
+			if out.PubKey != from {
+				amount = out.Value
+			}
+		}
+
+		found := false
+
+		for addr, _ := range amountMap {
+			if addr == from {
+				found = true
+				amountMap[from] += amount
+			}
+		}
+
+		if !found {
+			amountMap[from] = amount
+		}
+	}
+
+	for addr, totalAmount := range amountMap {
+		acc, _ := UTXO.FindSpendableOutputs(addr, totalAmount)
+		fmt.Printf("accumulate is %d, totalAmount is %d\n", acc, totalAmount)
+
+		if acc < totalAmount {
+			fmt.Printf("%s have not enough funds\n", addr)
+			return false
+		}
+	}
+
+	return true
 }
 
 func (tx *Transaction) IsCoinbase() bool {

@@ -3,11 +3,14 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
 
 	"github.com/patiparnphot/simple-utxos-blockchain/blockchain"
+	"github.com/patiparnphot/simple-utxos-blockchain/network"
 )
 
 type CommandLine struct{}
@@ -18,7 +21,11 @@ func (cli *CommandLine) printUsage() {
 	fmt.Println(" createblockchain -address ADDRESS creates a blockchain and sends genesis reward to address")
 	fmt.Println(" print - Prints the blocks in the chain")
 	fmt.Println(" send -from FROM -to TO -amount AMOUNT - Send amount of coins")
+	fmt.Println(" send -from FROM -to TO -amount AMOUNT -mine - Send amount of coins. Then -mine flag is set, mine off of this node")
+	fmt.Println(" send -from FROM -to TO -amount AMOUNT -mine -bootnode BOOTNODE - Send amount of coins. Then -mine flag is set, mine off of this node. Then -bootnode flag is set to connect with BOOTNODE.")
 	fmt.Println(" reindexutxo - Rebuilds the UTXO set")
+	fmt.Println(" startnode -miner ADDRESS - Start a node with ID specified in NODE_ID env. var. -miner enables mining")
+	fmt.Println(" startnode -miner ADDRESS -bootnode BOOTNODE - Start a node with ID specified in NODE_ID env. var. -miner enables mining. Then -bootnode flag is set to connect with BOOTNODE.")
 }
 
 func (cli *CommandLine) validateArgs() {
@@ -28,8 +35,14 @@ func (cli *CommandLine) validateArgs() {
 	}
 }
 
-func (cli *CommandLine) reindexUTXO() {
-	chain := blockchain.ResumeBlockChain()
+func (cli *CommandLine) StartNode(nodeID, minerAddress, bootnode string) {
+	fmt.Printf("Starting Node %s\n", nodeID)
+
+	network.StartServer(nodeID, minerAddress, bootnode)
+}
+
+func (cli *CommandLine) reindexUTXO(nodeId string) {
+	chain := blockchain.ResumeBlockChain(nodeId)
 	defer chain.Database.Close()
 	UTXOSet := blockchain.UTXOSet{chain}
 	UTXOSet.Reindex()
@@ -38,8 +51,8 @@ func (cli *CommandLine) reindexUTXO() {
 	fmt.Printf("Done! There are %d transactions in the UTXO set.\n", count)
 }
 
-func (cli *CommandLine) printChain() {
-	chain := blockchain.ResumeBlockChain()
+func (cli *CommandLine) printChain(nodeId string) {
+	chain := blockchain.ResumeBlockChain(nodeId)
 	defer chain.Database.Close()
 
 	iter := chain.Iterator()
@@ -66,8 +79,8 @@ func (cli *CommandLine) printChain() {
 	}
 }
 
-func (cli *CommandLine) createBlockchain(address string) {
-	chain := blockchain.InitBlockChain(address)
+func (cli *CommandLine) createBlockchain(address, nodeId string) {
+	chain := blockchain.InitBlockChain(address, nodeId)
 	defer chain.Database.Close()
 
 	UTXOSet := blockchain.UTXOSet{chain}
@@ -76,8 +89,8 @@ func (cli *CommandLine) createBlockchain(address string) {
 	fmt.Println("Finished!!!")
 }
 
-func (cli *CommandLine) getBalance(address string) {
-	chain := blockchain.ResumeBlockChain()
+func (cli *CommandLine) getBalance(address, nodeId string) {
+	chain := blockchain.ResumeBlockChain(nodeId)
 	UTXOSet := blockchain.UTXOSet{chain}
 	defer chain.Database.Close()
 
@@ -91,34 +104,98 @@ func (cli *CommandLine) getBalance(address string) {
 	fmt.Printf("Balance of %s: %d\n", address, balance)
 }
 
-func (cli *CommandLine) send(from, to string, amount int) {
-	chain := blockchain.ResumeBlockChain()
-	UTXOSet := blockchain.UTXOSet{chain}
-	defer chain.Database.Close()
+func (cli *CommandLine) send(from, to string, amount int, nodeId string, mineNow bool, bootnode string) {
+	path := fmt.Sprintf(blockchain.DbPath, nodeId)
+	var chain *blockchain.BlockChain
 
-	tx := blockchain.NewTransaction(from, to, amount, &UTXOSet)
-	block := chain.AddBlock([]*blockchain.Transaction{tx})
-	UTXOSet.Update(block)
+	if blockchain.DBexists(path) {
+		chain = blockchain.ResumeBlockChain(nodeId)
+		fmt.Println("Resumed chain")
 
-	fmt.Println("Transfer Success!!!")
+		defer chain.Database.Close()
+		UTXOSet := blockchain.UTXOSet{chain}
+		UTXOSet.Reindex()
+
+		tx := blockchain.NewTransaction(from, to, amount, &UTXOSet)
+		if mineNow {
+			cbTx := blockchain.CoinbaseTx(from, "")
+			txs := []*blockchain.Transaction{cbTx, tx}
+			block := chain.MineBlock(txs)
+			UTXOSet.Update(block)
+			fmt.Println("Transfer & Mine Success!!!")
+		} else if bootnode != "" {
+			network.KnownNodes[0] = bootnode
+			network.SendTx(network.KnownNodes[0], tx)
+			fmt.Println("send tx")
+		} else {
+			fmt.Println("Please enter bootnode or mine")
+		}
+	} else if bootnode == "" {
+		chain = blockchain.InitBlockChain(from, nodeId)
+		fmt.Printf("Created new chain with %s\n", from)
+
+		defer chain.Database.Close()
+		UTXOSet := blockchain.UTXOSet{chain}
+		UTXOSet.Reindex()
+
+		fmt.Println("Please enter the command again")
+	} else {
+		network.NodeAddress = fmt.Sprintf("localhost:%s", nodeId)
+
+		ln, err := net.Listen(network.Protocol, network.NodeAddress)
+
+		network.KnownNodes[0] = bootnode
+		network.SendBootnode(bootnode)
+
+		conn, err := ln.Accept()
+		blockchain.Handle(err)
+
+		req, err := ioutil.ReadAll(conn)
+		conn.Close()
+		blockchain.Handle(err)
+
+		command := network.BytesToCmd(req[:network.CommandLength])
+		fmt.Printf("Received %s command\n", command)
+
+		chain = network.HandleGenesis(req)
+		defer chain.Database.Close()
+
+		network.SendVersion(bootnode, chain)
+		fmt.Println("Please enter the command again")
+	}
 }
 
 func (cli *CommandLine) Run() {
 	cli.validateArgs()
+
+	nodeID := os.Getenv("NODE_ID")
+	if nodeID == "" {
+		fmt.Printf("NODE_ID env is not set!")
+		runtime.Goexit()
+	}
 
 	getBalanceCmd := flag.NewFlagSet("getbalance", flag.ExitOnError)
 	createBlockchainCmd := flag.NewFlagSet("createblockchain", flag.ExitOnError)
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	printChainCmd := flag.NewFlagSet("print", flag.ExitOnError)
 	reindexUTXOCmd := flag.NewFlagSet("reindexutxo", flag.ExitOnError)
+	startNodeCmd := flag.NewFlagSet("startnode", flag.ExitOnError)
 
 	getBalanceAddress := getBalanceCmd.String("address", "", "the address to get balance for")
 	createBlockchainAddress := createBlockchainCmd.String("address", "", "the address to send genesis reward to")
 	sendFrom := sendCmd.String("from", "", "sender address")
 	sendTo := sendCmd.String("to", "", "receiver address")
 	sendAmount := sendCmd.Int("amount", 0, "amount to send")
+	sendMine := sendCmd.Bool("mine", false, "Mine immediately on the same node")
+	sendBootnode := sendCmd.String("bootnode", "", "Enable bootnode mode")
+	startNodeMiner := startNodeCmd.String("miner", "", "Enable mining mode and send reward to ADDRESS")
+	startNodeBootnode := startNodeCmd.String("bootnode", "", "Enable bootnode mode")
 
 	switch os.Args[1] {
+	case "startnode":
+		err := startNodeCmd.Parse(os.Args[2:])
+		blockchain.Handle(err)
+
 	case "getbalance":
 		err := getBalanceCmd.Parse(os.Args[2:])
 		blockchain.Handle(err)
@@ -149,7 +226,7 @@ func (cli *CommandLine) Run() {
 			getBalanceCmd.Usage()
 			runtime.Goexit()
 		} else {
-			cli.getBalance(*getBalanceAddress)
+			cli.getBalance(*getBalanceAddress, nodeID)
 		}
 	}
 
@@ -158,7 +235,7 @@ func (cli *CommandLine) Run() {
 			createBlockchainCmd.Usage()
 			runtime.Goexit()
 		} else {
-			cli.createBlockchain(*createBlockchainAddress)
+			cli.createBlockchain(*createBlockchainAddress, nodeID)
 		}
 	}
 
@@ -167,15 +244,23 @@ func (cli *CommandLine) Run() {
 			sendCmd.Usage()
 			runtime.Goexit()
 		} else {
-			cli.send(*sendFrom, *sendTo, *sendAmount)
+			cli.send(*sendFrom, *sendTo, *sendAmount, nodeID, *sendMine, *sendBootnode)
 		}
 	}
 
 	if printChainCmd.Parsed() {
-		cli.printChain()
+		cli.printChain(nodeID)
 	}
 
 	if reindexUTXOCmd.Parsed() {
-		cli.reindexUTXO()
+		cli.reindexUTXO(nodeID)
+	}
+
+	if startNodeCmd.Parsed() {
+		if nodeID == "" {
+			startNodeCmd.Usage()
+			runtime.Goexit()
+		}
+		cli.StartNode(nodeID, *startNodeMiner, *startNodeBootnode)
 	}
 }
