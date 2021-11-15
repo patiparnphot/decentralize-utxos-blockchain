@@ -15,7 +15,7 @@ import (
 
 	"github.com/vrecan/death/v3"
 
-	"github.com/patiparnphot/simple-utxos-blockchain/blockchain"
+	"github.com/patiparnphot/decentralize-utxos-blockchain/blockchain"
 )
 
 const (
@@ -214,7 +214,7 @@ func HandleAddr(request []byte) {
 	RequestBlocks()
 }
 
-func HandleBlock(request []byte, chain *blockchain.BlockChain) {
+func HandleBlock(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload Block
 
@@ -235,7 +235,7 @@ func HandleBlock(request []byte, chain *blockchain.BlockChain) {
 
 	if len(blocksInTransit) > 0 {
 		blockHash := blocksInTransit[0]
-		SendGetData(payload.AddrFrom, "block", blockHash)
+		SendGetData(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), "block", blockHash)
 
 		blocksInTransit = blocksInTransit[1:]
 	} else {
@@ -271,7 +271,7 @@ func HandleGenesis(request []byte) *blockchain.BlockChain {
 	return chain
 }
 
-func HandleInv(request []byte, chain *blockchain.BlockChain) {
+func HandleInv(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload Inv
 
@@ -290,7 +290,7 @@ func HandleInv(request []byte, chain *blockchain.BlockChain) {
 		blocksInTransit = payload.Items
 
 		blockHash := payload.Items[0]
-		SendGetData(payload.AddrFrom, "block", blockHash)
+		SendGetData(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), "block", blockHash)
 
 		newInTransit := [][]byte{}
 		for _, b := range blocksInTransit {
@@ -305,12 +305,12 @@ func HandleInv(request []byte, chain *blockchain.BlockChain) {
 		txID := payload.Items[0]
 
 		if memoryPool[hex.EncodeToString(txID)].ID == nil {
-			SendGetData(payload.AddrFrom, "tx", txID)
+			SendGetData(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), "tx", txID)
 		}
 	}
 }
 
-func HandleGetBlocks(request []byte, chain *blockchain.BlockChain) {
+func HandleGetBlocks(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload GetBlocks
 
@@ -324,10 +324,10 @@ func HandleGetBlocks(request []byte, chain *blockchain.BlockChain) {
 	// fmt.Printf("AddrFrom: %s\n", payload.AddrFrom)
 
 	blocks := chain.GetBlockHashes()
-	SendInv(payload.AddrFrom, "block", blocks)
+	SendInv(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), "block", blocks)
 }
 
-func HandleGetData(request []byte, chain *blockchain.BlockChain) {
+func HandleGetData(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload GetData
 
@@ -346,18 +346,18 @@ func HandleGetData(request []byte, chain *blockchain.BlockChain) {
 			return
 		}
 
-		SendBlock(payload.AddrFrom, &block)
+		SendBlock(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), &block)
 	}
 
 	if payload.Type == "tx" {
 		txID := hex.EncodeToString(payload.ID)
 		tx := memoryPool[txID]
 
-		SendTx(payload.AddrFrom, &tx)
+		SendTx(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), &tx)
 	}
 }
 
-func HandleTx(request []byte, chain *blockchain.BlockChain) {
+func HandleTx(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload Tx
 
@@ -380,7 +380,7 @@ func HandleTx(request []byte, chain *blockchain.BlockChain) {
 
 	// if nodeAddress == KnownNodes[0] {
 	for _, node := range KnownNodes {
-		if node != NodeAddress && node != payload.AddrFrom {
+		if node != NodeAddress && node != fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom) {
 			SendInv(node, "tx", [][]byte{tx.ID})
 		}
 	}
@@ -439,7 +439,7 @@ func MineTx(chain *blockchain.BlockChain) {
 	}
 }
 
-func HandleVersion(request []byte, chain *blockchain.BlockChain) {
+func HandleVersion(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload Version
 
@@ -453,7 +453,7 @@ func HandleVersion(request []byte, chain *blockchain.BlockChain) {
 	bestHeight := chain.GetBestHeight()
 	otherHeight := payload.BestHeight
 
-	// fmt.Printf("AddrFrom: %s\n", payload.AddrFrom)
+	fmt.Printf("AddrFrom: %s\n", fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom))
 
 	if bestHeight < otherHeight {
 		SendGetBlocks(payload.AddrFrom)
@@ -461,12 +461,12 @@ func HandleVersion(request []byte, chain *blockchain.BlockChain) {
 		SendVersion(payload.AddrFrom, chain)
 	}
 
-	if !NodeIsKnown(payload.AddrFrom) {
-		KnownNodes = append(KnownNodes, payload.AddrFrom)
+	if !NodeIsKnown(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom)) {
+		KnownNodes = append(KnownNodes, fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom))
 	}
 }
 
-func HandleBootnode(request []byte, chain *blockchain.BlockChain) {
+func HandleBootnode(request []byte, chain *blockchain.BlockChain, remoteIP string) {
 	var buff bytes.Buffer
 	var payload Version
 
@@ -477,14 +477,18 @@ func HandleBootnode(request []byte, chain *blockchain.BlockChain) {
 		log.Panic(err)
 	}
 
-	// fmt.Printf("AddrFrom: %s\n", payload.AddrFrom)
+	fmt.Printf("AddrFrom: %s\n", fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom))
 	genesisBlock := chain.GetGenesisBlock()
-	SendGenesis(payload.AddrFrom, &genesisBlock)
+	SendGenesis(fmt.Sprintf("%s%s", remoteIP, payload.AddrFrom), &genesisBlock)
 }
 
 func HandleConnection(conn net.Conn, chain *blockchain.BlockChain) {
+	remoteIP := ""
+	if addr, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		remoteIP = addr.IP.String()
+		fmt.Printf("remoteIP: %s\n", remoteIP)
+	}
 	// fmt.Printf("localAddr: %s\n", conn.LocalAddr().String())
-	// fmt.Printf("remoteAddr: %s\n", conn.RemoteAddr().String())
 
 	req, err := ioutil.ReadAll(conn)
 	defer conn.Close()
@@ -499,19 +503,19 @@ func HandleConnection(conn net.Conn, chain *blockchain.BlockChain) {
 	case "addr":
 		HandleAddr(req)
 	case "block":
-		HandleBlock(req, chain)
+		HandleBlock(req, chain, remoteIP)
 	case "inv":
-		HandleInv(req, chain)
+		HandleInv(req, chain, remoteIP)
 	case "getblocks":
-		HandleGetBlocks(req, chain)
+		HandleGetBlocks(req, chain, remoteIP)
 	case "getdata":
-		HandleGetData(req, chain)
+		HandleGetData(req, chain, remoteIP)
 	case "tx":
-		HandleTx(req, chain)
+		HandleTx(req, chain, remoteIP)
 	case "version":
-		HandleVersion(req, chain)
+		HandleVersion(req, chain, remoteIP)
 	case "bootnode":
-		HandleBootnode(req, chain)
+		HandleBootnode(req, chain, remoteIP)
 	default:
 		fmt.Println("Unknown command")
 	}
@@ -519,7 +523,7 @@ func HandleConnection(conn net.Conn, chain *blockchain.BlockChain) {
 }
 
 func StartServer(nodeID, minerAddress, bootnode string) {
-	NodeAddress = fmt.Sprintf("localhost:%s", nodeID)
+	NodeAddress = fmt.Sprintf(":%s", nodeID)
 	mineAddress = minerAddress
 
 	path := fmt.Sprintf(blockchain.DbPath, nodeID)

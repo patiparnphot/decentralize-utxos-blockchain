@@ -1,4 +1,4 @@
-module github.com/patiparnphot/simple-utxos-blockchain
+module github.com/patiparnphot/decentralize-utxos-blockchain
 
 go 1.13
 

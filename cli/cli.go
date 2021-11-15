@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/patiparnphot/simple-utxos-blockchain/blockchain"
-	"github.com/patiparnphot/simple-utxos-blockchain/network"
+	"github.com/patiparnphot/decentralize-utxos-blockchain/blockchain"
+	"github.com/patiparnphot/decentralize-utxos-blockchain/network"
 )
 
 type CommandLine struct{}
@@ -140,7 +140,7 @@ func (cli *CommandLine) send(from, to string, amount int, nodeId string, mineNow
 
 		fmt.Println("Please enter the command again")
 	} else {
-		network.NodeAddress = fmt.Sprintf("localhost:%s", nodeId)
+		network.NodeAddress = fmt.Sprintf(":%s", nodeId)
 
 		ln, err := net.Listen(network.Protocol, network.NodeAddress)
 
